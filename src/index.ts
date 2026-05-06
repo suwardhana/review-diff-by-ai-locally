@@ -13,6 +13,8 @@ import {
   listProfiles,
 } from "./profiles";
 import { input } from "./prompt";
+import { pingProvider } from "./ai";
+import ora from "ora";
 import { DEFAULT_SYSTEM_PROMPT } from "./types";
 
 const program = new Command();
@@ -62,6 +64,67 @@ program
       console.error(chalk.red(`Error: ${err.message}`));
       process.exit(1);
     }
+  });
+
+// ---- ping ----
+program
+  .command("ping")
+  .description("Test connectivity to all configured AI providers")
+  .option("-v, --verbose", "show raw API response for each provider")
+  .action(async (options) => {
+    ensureConfig();
+    const config = loadConfig();
+
+    if (config.providers.length === 0) {
+      console.log(chalk.yellow("No providers configured. Add one first."));
+      return;
+    }
+
+    const verbose = options.verbose === true;
+    console.log(chalk.cyan(`\nPinging ${config.providers.length} provider(s)...\n`));
+
+    const results = await Promise.allSettled(
+      config.providers.map((p) => pingProvider(p))
+    );
+
+    let ok = 0;
+    let fail = 0;
+
+    for (const r of results) {
+      if (r.status === "fulfilled") {
+        const res = r.value;
+        if (res.status === "ok") {
+          ok++;
+          console.log(`  ${chalk.green("✔")} ${chalk.bold(res.provider)} ${chalk.gray(`(${res.model})`)}`);
+          console.log(`    ${chalk.gray(res.baseUrl)}`);
+          console.log(`    ${chalk.green(`${res.latencyMs}ms`)}  →  ${chalk.dim(res.response)}`);
+          if (verbose && res.rawResponse) {
+            console.log(chalk.dim(`    ── raw response ──`));
+            console.log(chalk.dim(res.rawResponse));
+            console.log(chalk.dim(`    ──────────────────`));
+          }
+        } else {
+          fail++;
+          console.log(`  ${chalk.red("✘")} ${chalk.bold(res.provider)} ${chalk.gray(`(${res.model})`)}`);
+          console.log(`    ${chalk.gray(res.baseUrl)}`);
+          console.log(`    ${chalk.red(`${res.latencyMs}ms`)}  ${chalk.red(res.error)}`);
+          if (verbose && res.rawResponse) {
+            console.log(chalk.dim(`    ── raw response ──`));
+            console.log(chalk.dim(res.rawResponse));
+            console.log(chalk.dim(`    ──────────────────`));
+          }
+        }
+        console.log();
+      } else {
+        fail++;
+        console.log(`  ${chalk.red("✘")} ${chalk.red(r.reason?.message ?? "Unknown error")}`);
+        console.log();
+      }
+    }
+
+    console.log(
+      `${chalk.green(`${ok} ok`)}  ${chalk.red(`${fail} failed`)}  (of ${config.providers.length} total)`
+    );
   });
 
 // ---- config show ----

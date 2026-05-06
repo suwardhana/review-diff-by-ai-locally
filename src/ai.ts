@@ -87,6 +87,90 @@ export function buildReviewMessages(
   ];
 }
 
+export interface PingResult {
+  provider: string;
+  model: string;
+  baseUrl: string;
+  status: "ok" | "fail";
+  latencyMs: number;
+  response?: string;
+  rawResponse?: string;
+  error?: string;
+}
+
+export async function pingProvider(provider: Provider): Promise<PingResult> {
+  const baseUrl = provider.baseUrl.replace(/\/+$/, "");
+  const start = performance.now();
+
+  try {
+    const apiKey = resolveProviderApiKey(provider);
+
+    const response = await fetch(`${baseUrl}/v1/chat/completions`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: provider.model,
+        messages: [{ role: "user", content: "ping" }],
+        max_tokens: 256,
+        temperature: 0,
+      }),
+    });
+
+    const latencyMs = Math.round(performance.now() - start);
+
+    if (!response.ok) {
+      const errBody = await response.text();
+      let errMsg = `${response.status} ${response.statusText}`;
+      try {
+        const parsed = JSON.parse(errBody);
+        if (parsed.error?.message) errMsg = parsed.error.message;
+      } catch {}
+      return {
+        provider: provider.name,
+        model: provider.model,
+        baseUrl,
+        status: "fail",
+        latencyMs,
+        error: errMsg,
+      };
+    }
+
+    const data = await response.json();
+    const content = data.choices?.[0]?.message?.content;
+    const reasoning = data.choices?.[0]?.message?.reasoning_content;
+
+    const preview = content?.trim()
+      ? content.slice(0, 80)
+      : reasoning?.trim()
+        ? `[reasoning] ${reasoning.slice(0, 80)}`
+        : "pong";
+
+    return {
+      provider: provider.name,
+      model: provider.model,
+      baseUrl,
+      status: "ok",
+      latencyMs,
+      response: preview,
+      rawResponse: JSON.stringify(data, null, 2),
+    };
+  } catch (err: any) {
+    const latencyMs = Math.round(performance.now() - start);
+    return {
+      provider: provider.name,
+      model: provider.model,
+      baseUrl,
+      status: "fail",
+      latencyMs,
+      error: err.message ?? String(err),
+      rawResponse: err.body ?? undefined,
+    };
+  }
+}
+
 export function formatReviewComment(
   review: string,
   providerName: string,

@@ -74,7 +74,7 @@ export async function postPrComment(
   repoUrl: string,
   body: string
 ): Promise<string> {
-  const tmpFile = `/tmp/pr-review-comment-${prNumber}-${Date.now()}.md`;
+  const tmpFile = `/tmp/pr-review-comment-${prNumber}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.md`;
   await Bun.write(tmpFile, body);
 
   const { exitCode, stderr } = await ghSpawn([
