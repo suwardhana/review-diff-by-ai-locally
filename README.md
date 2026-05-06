@@ -12,7 +12,7 @@ Review GitHub PRs locally using AI — fetch the diff, ask your LLMs, post revie
 
 ```bash
 git clone <repo-url>
-cd review-diff-by-deepseek
+cd review-diff-by-ai-locally
 bun install
 bun link
 ```
