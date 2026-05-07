@@ -71,81 +71,61 @@ export async function reviewPr(
     throw err;
   }
 
-  // 4. Parallel AI reviews
-  const spinner2 = ora(
-    `Asking ${providers.length} reviewer${providers.length > 1 ? "s" : ""}...`
-  ).start();
+  // 4. Review + post: each provider runs its own full pipeline independently
+  const total = providers.length;
+  const spinner2 = ora(`Asking ${total} reviewer${total > 1 ? "s" : ""}...`).start();
 
   const messages = buildReviewMessages(profile.systemPrompt, diff, metadata);
 
-  type ReviewResult = {
-    provider: Provider;
-    content: string;
-  };
+  type TaskOutcome =
+    | { status: "ok"; provider: string; review: string }
+    | { status: "fail"; provider: string; error: string };
 
-  let reviews: ReviewResult[];
-  try {
-    reviews = await Promise.all(
-      providers.map(async (provider) => {
+  const outcomes: TaskOutcome[] = await Promise.all(
+    providers.map(async (provider): Promise<TaskOutcome> => {
+      try {
         const content = await chatCompletion(provider, messages);
-        return { provider, content };
-      })
-    );
-    spinner2.succeed(
-      `Received ${reviews.length} review${reviews.length > 1 ? "s" : ""}`
-    );
-  } catch (err: any) {
-    spinner2.fail(err.message);
-    throw err;
-  }
-
-  // 5. Post comments in parallel
-  const spinner3 = ora("Posting reviews to PR...").start();
-
-  const commentResults = await Promise.allSettled(
-    reviews.map(async (review) => {
-      const commentBody = formatReviewComment(
-        review.content,
-        review.provider.name,
-        review.provider.model,
-        truncated
-      );
-      return postPrComment(prNumber, profile.repoUrl, commentBody).then(
-        () => review.provider.name
-      );
-    })
+        const commentBody = formatReviewComment(
+          content,
+          provider.name,
+          provider.model,
+          truncated,
+        );
+        await postPrComment(prNumber, profile.repoUrl, commentBody);
+        return { status: "ok", provider: provider.name, review: content };
+      } catch (err: any) {
+        return { status: "fail", provider: provider.name, error: err.message };
+      }
+    }),
   );
 
-  const succeeded: string[] = [];
-  const failed: string[] = [];
+  const succeeded = outcomes.filter((o) => o.status === "ok");
+  const failed = outcomes.filter((o) => o.status === "fail");
 
-  for (let i = 0; i < commentResults.length; i++) {
-    const result = commentResults[i];
-    if (result.status === "fulfilled") {
-      succeeded.push(result.value);
-    } else {
-      failed.push(`${providers[i].name}: ${result.reason?.message || "Unknown error"}`);
-    }
-  }
-
-  if (failed.length > 0) {
-    spinner3.warn(
-      `${succeeded.length}/${reviews.length} comments posted`
+  if (failed.length > 0 && succeeded.length > 0) {
+    spinner2.warn(
+      `${succeeded.length}/${total} reviews posted`
+    );
+  } else if (failed.length > 0) {
+    spinner2.fail(
+      `All ${total} reviewer${total > 1 ? "s" : ""} failed`
     );
   } else {
-    spinner3.succeed(
+    spinner2.succeed(
       `${succeeded.length} review${succeeded.length > 1 ? "s" : ""} posted to PR #${prNumber}`
     );
   }
 
-  // 6. Summary
+  // 5. Summary
   const prUrl = getPrUrl(profile.repoUrl, prNumber);
   console.log();
   if (succeeded.length > 0) {
-    console.log(chalk.green(`Posted by: ${succeeded.join(", ")}`));
+    console.log(chalk.green(`Posted by: ${succeeded.map((s) => s.provider).join(", ")}`));
   }
   if (failed.length > 0) {
-    console.log(chalk.red(`Failed: ${failed.join(", ")}`));
+    for (const f of failed) {
+      console.log(chalk.red(`  ✘ ${f.provider}: ${f.error}`));
+    }
   }
   console.log(chalk.blue(`PR: ${prUrl}`));
 }
