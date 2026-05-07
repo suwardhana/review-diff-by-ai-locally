@@ -76,14 +76,23 @@ export async function chatCompletion(
 
 export function buildReviewMessages(
   systemPrompt: string,
-  diff: string
+  diff: string,
+  metadata?: { title: string; body: string },
 ): ChatMessage[] {
+  let userContent = "";
+
+  if (metadata?.title) {
+    userContent += `## PR Title\n${metadata.title}\n\n`;
+  }
+  if (metadata?.body) {
+    userContent += `## PR Description\n${metadata.body}\n\n`;
+  }
+
+  userContent += `## PR Diff\n\`\`\`diff\n${diff}\n\`\`\``;
+
   return [
     { role: "system", content: systemPrompt },
-    {
-      role: "user",
-      content: `Please review the following pull request diff:\n\n\`\`\`diff\n${diff}\n\`\`\``,
-    },
+    { role: "user", content: userContent },
   ];
 }
 

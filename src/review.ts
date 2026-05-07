@@ -5,6 +5,7 @@ import { findProfile } from "./profiles";
 import { findProvider } from "./providers";
 import {
   fetchPrDiff,
+  fetchPrMetadata,
   truncateDiff,
   postPrComment,
   checkGhAuth,
@@ -46,17 +47,24 @@ export async function reviewPr(
   // 2. Check gh auth
   await checkGhAuth();
 
-  // 3. Fetch diff
-  const spinner = ora("Fetching PR diff...").start();
+  // 3. Fetch diff and PR metadata in parallel
+  const spinner = ora("Fetching PR diff and metadata...").start();
   let diff: string;
   let truncated = false;
+  let metadata: { title: string; body: string } = { title: "", body: "" };
   try {
-    diff = await fetchPrDiff(prNumber, profile.repoUrl);
-    const result = truncateDiff(diff);
+    const [rawDiff, meta] = await Promise.all([
+      fetchPrDiff(prNumber, profile.repoUrl),
+      fetchPrMetadata(prNumber, profile.repoUrl),
+    ]);
+    const result = truncateDiff(rawDiff);
     diff = result.diff;
     truncated = result.truncated;
+    metadata = meta;
+
+    const extra = meta.title ? `, ${meta.title.slice(0, 40)}...` : "";
     spinner.succeed(
-      `Fetched PR #${prNumber} diff (${result.diff.length.toLocaleString()} chars${truncated ? ", truncated" : ""})`
+      `Fetched PR #${prNumber} diff (${result.diff.length.toLocaleString()} chars${truncated ? ", truncated" : ""})${extra}`
     );
   } catch (err: any) {
     spinner.fail(err.message);
@@ -68,7 +76,7 @@ export async function reviewPr(
     `Asking ${providers.length} reviewer${providers.length > 1 ? "s" : ""}...`
   ).start();
 
-  const messages = buildReviewMessages(profile.systemPrompt, diff);
+  const messages = buildReviewMessages(profile.systemPrompt, diff, metadata);
 
   type ReviewResult = {
     provider: Provider;

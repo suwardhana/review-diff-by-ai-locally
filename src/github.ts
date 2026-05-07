@@ -92,6 +92,39 @@ export async function postPrComment(
   return `https://github.com/${repoUrl}/pull/${prNumber}`;
 }
 
+// ============ PR metadata ============
+
+export interface PrMetadata {
+  title: string;
+  body: string;
+}
+
+export async function fetchPrMetadata(
+  prNumber: number,
+  repoUrl: string
+): Promise<PrMetadata> {
+  const { exitCode, stdout, stderr } = await ghSpawn([
+    "pr", "view", String(prNumber), "--repo", repoUrl,
+    "--json", "title,body",
+    "--jq", ".",
+  ]);
+
+  if (exitCode !== 0) {
+    // non-fatal: metadata is nice-to-have, return empty
+    return { title: "", body: "" };
+  }
+
+  try {
+    const parsed = JSON.parse(stdout);
+    return {
+      title: parsed.title ?? "",
+      body: parsed.body ?? "",
+    };
+  } catch {
+    return { title: "", body: "" };
+  }
+}
+
 // ============ auth check ============
 
 export async function checkGhAuth(): Promise<void> {
