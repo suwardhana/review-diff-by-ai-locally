@@ -1,10 +1,13 @@
 import { z } from "zod";
 
+export const DEFAULT_TIMEOUT_MS = 300_000; // 5 minutes
+
 export const ProviderSchema = z.object({
   name: z.string().min(1),
   baseUrl: z.string().url(),
   model: z.string().min(1),
   apiKey: z.string().optional(),
+  timeoutMs: z.number().int().positive().optional(),
 });
 
 export const ProfileSchema = z.object({

@@ -1,5 +1,4 @@
 import chalk from "chalk";
-import ora from "ora";
 import { loadConfig } from "./config";
 import { findProfile } from "./profiles";
 import { findProvider } from "./providers";
@@ -12,7 +11,7 @@ import {
   getPrUrl,
 } from "./github";
 import {
-  chatCompletion,
+  chatCompletionStream,
   buildReviewMessages,
   formatReviewComment,
 } from "./ai";
@@ -20,7 +19,8 @@ import type { Provider, Profile } from "./types";
 
 export async function reviewPr(
   prNumber: number,
-  profileName?: string
+  profileName?: string,
+  timeoutMs?: number,
 ): Promise<void> {
   // 1. Load & resolve
   const config = loadConfig();
@@ -47,8 +47,8 @@ export async function reviewPr(
   // 2. Check gh auth
   await checkGhAuth();
 
-  // 3. Fetch diff and PR metadata in parallel
-  const spinner = ora("Fetching PR diff and metadata...").start();
+  // 3. Fetch diff and PR metadata
+  console.log(chalk.gray("Fetching PR diff and metadata..."));
   let diff: string;
   let truncated = false;
   let metadata: { title: string; body: string } = { title: "", body: "" };
@@ -63,69 +63,83 @@ export async function reviewPr(
     metadata = meta;
 
     const extra = meta.title ? `, ${meta.title.slice(0, 40)}...` : "";
-    spinner.succeed(
-      `Fetched PR #${prNumber} diff (${result.diff.length.toLocaleString()} chars${truncated ? ", truncated" : ""})${extra}`
+    console.log(
+      chalk.green(
+        `Fetched PR #${prNumber} diff (${result.diff.length.toLocaleString()} chars${truncated ? ", truncated" : ""})${extra}`
+      )
     );
   } catch (err: any) {
-    spinner.fail(err.message);
+    console.error(chalk.red(`\nError: ${err.message}`));
     throw err;
   }
 
-  // 4. Review + post: each provider runs its own full pipeline independently
-  const total = providers.length;
-  const spinner2 = ora(`Asking ${total} reviewer${total > 1 ? "s" : ""}...`).start();
-
   const messages = buildReviewMessages(profile.systemPrompt, diff, metadata);
 
-  type TaskOutcome =
+  // 4. Review each provider sequentially with streaming output
+  const outcomes: Array<
     | { status: "ok"; provider: string; review: string }
-    | { status: "fail"; provider: string; error: string };
+    | { status: "fail"; provider: string; error: string }
+  > = [];
 
-  const outcomes: TaskOutcome[] = await Promise.all(
-    providers.map(async (provider): Promise<TaskOutcome> => {
-      try {
-        const content = await chatCompletion(provider, messages);
-        const commentBody = formatReviewComment(
-          content,
-          provider.name,
-          provider.model,
-          truncated,
-        );
-        await postPrComment(prNumber, profile.repoUrl, commentBody);
-        return { status: "ok", provider: provider.name, review: content };
-      } catch (err: any) {
-        return { status: "fail", provider: provider.name, error: err.message };
+  for (const provider of providers) {
+    const header = `\n${chalk.bold.cyan("──")} ${chalk.bold(provider.name)} ${chalk.gray(`(${provider.model})`)} ${chalk.bold.cyan("──")}`;
+    console.log(header);
+
+    let fullReview = "";
+    let reasoning = "";
+
+    try {
+      const stream = chatCompletionStream(provider, messages, { timeoutMs });
+
+      for await (const event of stream) {
+        if (event.reasoning) {
+          reasoning += event.reasoning;
+          // Print reasoning dimmed — it's the model's thinking
+          process.stdout.write(chalk.dim(event.reasoning));
+        }
+        if (event.content) {
+          fullReview += event.content;
+          process.stdout.write(event.content);
+        }
       }
-    }),
-  );
 
-  const succeeded = outcomes.filter((o) => o.status === "ok");
-  const failed = outcomes.filter((o) => o.status === "fail");
+      // Ensure a trailing newline before the next section
+      if (!fullReview.endsWith("\n")) process.stdout.write("\n");
 
-  if (failed.length > 0 && succeeded.length > 0) {
-    spinner2.warn(
-      `${succeeded.length}/${total} reviews posted`
-    );
-  } else if (failed.length > 0) {
-    spinner2.fail(
-      `All ${total} reviewer${total > 1 ? "s" : ""} failed`
-    );
-  } else {
-    spinner2.succeed(
-      `${succeeded.length} review${succeeded.length > 1 ? "s" : ""} posted to PR #${prNumber}`
-    );
+      if (!fullReview.trim()) {
+        throw new Error("Received empty review.");
+      }
+
+      const commentBody = formatReviewComment(
+        fullReview,
+        provider.name,
+        provider.model,
+        truncated,
+      );
+      await postPrComment(prNumber, profile.repoUrl, commentBody);
+
+      console.log(chalk.green(`✓ Posted to PR #${prNumber}`));
+      outcomes.push({ status: "ok", provider: provider.name, review: fullReview });
+    } catch (err: any) {
+      console.log(chalk.red(`✘ ${err.message}`));
+      outcomes.push({ status: "fail", provider: provider.name, error: err.message });
+    }
   }
 
   // 5. Summary
+  const succeeded = outcomes.filter((o) => o.status === "ok");
+  const failed = outcomes.filter((o) => o.status === "fail");
   const prUrl = getPrUrl(profile.repoUrl, prNumber);
+
   console.log();
   if (succeeded.length > 0) {
-    console.log(chalk.green(`Posted by: ${succeeded.map((s) => s.provider).join(", ")}`));
+    console.log(
+      chalk.green(`${succeeded.length}/${providers.length} reviews posted → ${prUrl}`)
+    );
   }
   if (failed.length > 0) {
     for (const f of failed) {
       console.log(chalk.red(`  ✘ ${f.provider}: ${f.error}`));
     }
   }
-  console.log(chalk.blue(`PR: ${prUrl}`));
 }

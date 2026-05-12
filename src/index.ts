@@ -28,6 +28,7 @@ program
 program
   .argument("[pr-number]", "PR number to review")
   .option("-p, --profile <name>", "use a specific profile instead of active")
+  .option("-t, --timeout <ms>", "timeout in milliseconds (default: 300000 = 5min)", parseInt)
   .action(async (prNumber, options) => {
     if (!prNumber) {
       program.outputHelp();
@@ -46,7 +47,7 @@ program
     }
 
     try {
-      await reviewPr(num, options.profile);
+      await reviewPr(num, options.profile, options.timeout);
     } catch (err: any) {
       console.error(chalk.red(`\nError: ${err.message}`));
       process.exit(1);
