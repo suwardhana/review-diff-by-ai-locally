@@ -45,7 +45,7 @@ export async function chatCompletion(
     model: provider.model,
     messages,
     temperature: options?.temperature ?? 0.3,
-    max_tokens: options?.maxTokens ?? 4096,
+    max_tokens: options?.maxTokens ?? 16384,
   };
 
   const response = await fetch(`${baseUrl}/v1/chat/completions`, {
@@ -92,6 +92,7 @@ export interface StreamEvent {
   content?: string;
   reasoning?: string;
   done: boolean;
+  premature?: boolean; // stream ended without [DONE] sentinel
 }
 
 export async function* chatCompletionStream(
@@ -111,7 +112,7 @@ export async function* chatCompletionStream(
     model: provider.model,
     messages,
     temperature: options?.temperature ?? 0.3,
-    max_tokens: options?.maxTokens ?? 4096,
+    max_tokens: options?.maxTokens ?? 16384,
     stream: true,
   };
 
@@ -183,7 +184,8 @@ export async function* chatCompletionStream(
     reader.releaseLock();
   }
 
-  yield { done: true };
+  // Stream ended without [DONE] — server closed the connection prematurely
+  yield { done: true, premature: true };
 }
 
 export function buildReviewMessages(

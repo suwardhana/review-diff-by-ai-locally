@@ -11,6 +11,7 @@ import {
   getPrUrl,
 } from "./github";
 import {
+  chatCompletion,
   chatCompletionStream,
   buildReviewMessages,
   formatReviewComment,
@@ -89,12 +90,17 @@ export async function reviewPr(
     let reasoning = "";
 
     try {
+      let premature = false;
+
       const stream = chatCompletionStream(provider, messages, { timeoutMs });
 
       for await (const event of stream) {
+        if (event.done) {
+          premature = event.premature === true;
+          break;
+        }
         if (event.reasoning) {
           reasoning += event.reasoning;
-          // Print reasoning dimmed — it's the model's thinking
           process.stdout.write(chalk.dim(event.reasoning));
         }
         if (event.content) {
@@ -103,11 +109,44 @@ export async function reviewPr(
         }
       }
 
-      // Ensure a trailing newline before the next section
       if (!fullReview.endsWith("\n")) process.stdout.write("\n");
 
+      // If stream ended prematurely and we have no content, retry with non-streaming
+      if (premature && !fullReview.trim()) {
+        const reasonChars = reasoning.length.toLocaleString();
+        console.log(
+          chalk.yellow(
+            `⚠ Connection dropped after ${reasonChars} chars of reasoning, no content. Retrying with non-streaming request...`
+          )
+        );
+        try {
+          fullReview = await chatCompletion(provider, messages, {
+            timeoutMs,
+            maxTokens: 32768, // higher ceiling for retry — reasoning tokens may have eaten the first attempt
+          });
+          process.stdout.write(fullReview);
+          if (!fullReview.endsWith("\n")) process.stdout.write("\n");
+          premature = false;
+        } catch (retryErr: any) {
+          console.log(chalk.yellow(`⚠ Retry also failed: ${retryErr.message}`));
+          // Fall through — reasoning will be used as fallback below
+        }
+      }
+
       if (!fullReview.trim()) {
-        throw new Error("Received empty review.");
+        if (reasoning.length > 0) {
+          // Post the reasoning as a partial review — it often contains the analysis
+          fullReview =
+            `> ⚠️ **Partial review** — the model's final output was not received, but its reasoning/thinking was captured:\n\n` +
+            reasoning;
+          console.log(
+            chalk.yellow(
+              `⚠ Posting reasoning as partial review (${reasoning.length.toLocaleString()} chars)`
+            )
+          );
+        } else {
+          throw new Error("AI returned an empty review.");
+        }
       }
 
       const commentBody = formatReviewComment(
@@ -118,7 +157,9 @@ export async function reviewPr(
       );
       await postPrComment(prNumber, profile.repoUrl, commentBody);
 
-      console.log(chalk.green(`✓ Posted to PR #${prNumber}`));
+      console.log(
+        chalk.green(`✓ Posted to PR #${prNumber}${premature ? " (partial review)" : ""}`)
+      );
       outcomes.push({ status: "ok", provider: provider.name, review: fullReview });
     } catch (err: any) {
       console.log(chalk.red(`✘ ${err.message}`));
