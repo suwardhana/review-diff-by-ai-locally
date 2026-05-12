@@ -51,8 +51,9 @@ pr-review <num>
 ## Non-obvious details
 
 ### Streaming & timeout
-- Reviews now run **sequentially** (not parallel) via `chatCompletionStream` — an async generator that parses SSE chunks and yields `{ content?, reasoning?, done }`.
+- Reviews run **sequentially** via `chatCompletionStream` — an async generator that parses SSE chunks and yields `{ content?, reasoning?, done, premature? }`.
 - Live output: `reasoning_content` prints dimmed, regular `content` prints normally.
+- If the stream ends without the `[DONE]` sentinel (`premature: true`) and no content was received, it **retries once** with the non-streaming `chatCompletion` API (which doesn't drop connections during thinking).
 - Every `fetch()` uses `AbortSignal.timeout(timeoutMs)` — resolved as: CLI `--timeout` flag → per-provider `timeoutMs` config → `DEFAULT_TIMEOUT_MS` (300s).
 - `--timeout` CLI flag accepts milliseconds.
 
